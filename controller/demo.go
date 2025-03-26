@@ -5,6 +5,7 @@ import (
 	"go-final/database"
 	"go-final/models"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,8 +16,12 @@ func DemoController(router *gin.Engine) {
 	router.POST("auth/login", login)
 	router.POST("auth/change-password", changePassword)
 	router.GET("customer/:customer_id/carts", getCustomerCarts)
+	router.GET("products/search", searchProducts)
+	router.POST("customer/:customer_id/add-to-cart", addToCart)
+	// router.POST("customer/:customer_id/add-to-cart", searchAndAddToCart)
 }
 
+// ล็อคอิน
 func login(c *gin.Context) {
 	var request models.LoginRequest
 	var customer models.Customer
@@ -71,7 +76,7 @@ func login(c *gin.Context) {
 
 }
 
-// เพิ่มฟังก์ชันสำหรับเปลี่ยนรหัสผ่าน
+// เปลี่ยนรหัสผ่าน
 func changePassword(c *gin.Context) {
 	var request models.ChangePasswordRequest
 	var customer models.Customer
@@ -134,6 +139,7 @@ func changePassword(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Password changed successfully"})
 }
 
+// แสดงรายการตะกร้าผู้ใช้
 func getCustomerCarts(c *gin.Context) {
 	customerID := c.Param("customer_id")
 
@@ -220,4 +226,312 @@ func getCustomerCarts(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// // ค้นหาสินค้าและเพิ่มสินค้าลงรถเข็น
+// func searchAndAddToCart(c *gin.Context) {
+// 	customerID := c.Param("customer_id")
+
+// 	// ตรวจสอบว่ามี customer_id หรือไม่
+// 	if customerID == "" {
+// 		c.JSON(http.StatusBadRequest, gin.H{"error": "Customer ID is required"})
+// 		return
+// 	}
+
+// 	// ตรวจสอบว่ามีลูกค้าในระบบหรือไม่
+// 	var customer models.Customer
+// 	if err := database.DB.Table("customer").Where("customer_id = ?", customerID).First(&customer).Error; err != nil {
+// 		c.JSON(http.StatusNotFound, gin.H{"error": "Customer not found"})
+// 		return
+// 	}
+
+// 	// รับข้อมูลการค้นหาและการเพิ่มสินค้าลงรถเข็น
+// 	var request struct {
+// 		SearchDescription string  `json:"search_description"`
+// 		MinPrice          float64 `json:"min_price"`
+// 		MaxPrice          float64 `json:"max_price"`
+// 		ProductID         int     `json:"product_id"`
+// 		Quantity          int     `json:"quantity"`
+// 		CartName          string  `json:"cart_name"`
+// 	}
+
+// 	if err := c.ShouldBindJSON(&request); err != nil {
+// 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+// 		return
+// 	}
+
+// 	// ตรวจสอบข้อมูลที่จำเป็น
+// 	if request.ProductID == 0 || request.Quantity <= 0 || request.CartName == "" {
+// 		c.JSON(http.StatusBadRequest, gin.H{"error": "Product ID, quantity, and cart name are required"})
+// 		return
+// 	}
+
+// 	// ค้นหาสินค้าตามเงื่อนไข
+// 	var products []models.Product
+// 	query := database.DB.Table("product").Where("product_id = ?", request.ProductID)
+
+// 	// เพิ่มเงื่อนไขการค้นหาตามคำอธิบายสินค้า (ถ้ามี)
+// 	if request.SearchDescription != "" {
+// 		query = query.Where("description LIKE ?", "%"+request.SearchDescription+"%")
+// 	}
+
+// 	// เพิ่มเงื่อนไขการค้นหาตามช่วงราคา (ถ้ามี)
+// 	if request.MinPrice > 0 {
+// 		query = query.Where("price >= ?", request.MinPrice)
+// 	}
+// 	if request.MaxPrice > 0 {
+// 		query = query.Where("price <= ?", request.MaxPrice)
+// 	}
+
+// 	// ดึงข้อมูลสินค้า
+// 	if err := query.Find(&products).Error; err != nil {
+// 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search products"})
+// 		return
+// 	}
+
+// 	// ตรวจสอบว่าพบสินค้าหรือไม่
+// 	if len(products) == 0 {
+// 		c.JSON(http.StatusNotFound, gin.H{"error": "No products found matching the criteria"})
+// 		return
+// 	}
+
+// 	// ตรวจสอบว่ามีรถเข็นตามชื่อที่กำหนดหรือไม่
+// 	var cart models.Cart
+// 	err := database.DB.Table("cart").Where("customer_id = ? AND cart_name = ?", customerID, request.CartName).First(&cart).Error
+
+// 	// ถ้าไม่มีรถเข็น ให้สร้างใหม่
+// 	if err != nil {
+// 		cart = models.Cart{
+// 			CustomerID: customer.CustomerID,
+// 			CartName:   request.CartName,
+// 		}
+
+// 		if err := database.DB.Table("cart").Create(&cart).Error; err != nil {
+// 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create new cart"})
+// 			return
+// 		}
+// 	}
+
+// 	// ตรวจสอบว่ามีสินค้านี้ในรถเข็นอยู่แล้วหรือไม่
+// 	var existingItem models.CartItemDB
+// 	err = database.DB.Table("cart_item").
+// 		Where("cart_id = ? AND product_id = ?", cart.CartID, request.ProductID).
+// 		First(&existingItem).Error
+
+// 	// ถ้ามีสินค้านี้อยู่แล้ว ให้เพิ่มจำนวน
+// 	if err == nil {
+// 		// อัปเดตจำนวนสินค้า
+// 		newQuantity := existingItem.Quantity + request.Quantity
+
+// 		if err := database.DB.Table("cart_item").
+// 			Where("cart_item_id = ?", existingItem.CartItemID).
+// 			Update("quantity", newQuantity).Error; err != nil {
+// 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update item quantity"})
+// 			return
+// 		}
+
+// 		c.JSON(http.StatusOK, gin.H{
+// 			"message":      "Product quantity updated in cart",
+// 			"cart_id":      cart.CartID,
+// 			"cart_name":    cart.CartName,
+// 			"product_id":   request.ProductID,
+// 			"new_quantity": newQuantity,
+// 		})
+// 		return
+// 	}
+
+// 	// ถ้ายังไม่มีสินค้านี้ในรถเข็น ให้เพิ่มใหม่
+// 	newItem := models.CartItemDB{
+// 		CartID:    cart.CartID,
+// 		ProductID: request.ProductID,
+// 		Quantity:  request.Quantity,
+// 	}
+
+// 	if err := database.DB.Table("cart_item").Create(&newItem).Error; err != nil {
+// 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add item to cart"})
+// 		return
+// 	}
+
+// 	c.JSON(http.StatusOK, gin.H{
+// 		"message":    "Product added to cart successfully",
+// 		"cart_id":    cart.CartID,
+// 		"cart_name":  cart.CartName,
+// 		"product_id": request.ProductID,
+// 		"quantity":   request.Quantity,
+// 	})
+// }
+
+// ค้นหาสินค้า
+func searchProducts(c *gin.Context) {
+	// รับพารามิเตอร์การค้นหาจาก query string
+	searchDescription := c.Query("description")
+	minPriceStr := c.Query("min_price")
+	maxPriceStr := c.Query("max_price")
+
+	// แปลงค่าราคาจาก string เป็น float64
+	var minPrice, maxPrice float64
+	var err error
+
+	if minPriceStr != "" {
+		minPrice, err = strconv.ParseFloat(minPriceStr, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid min_price format"})
+			return
+		}
+	}
+
+	if maxPriceStr != "" {
+		maxPrice, err = strconv.ParseFloat(maxPriceStr, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid max_price format"})
+			return
+		}
+	}
+
+	// สร้าง query สำหรับค้นหาสินค้า
+	query := database.DB.Table("product")
+
+	// เพิ่มเงื่อนไขการค้นหาตามคำอธิบายสินค้า (ถ้ามี)
+	if searchDescription != "" {
+		query = query.Where("description LIKE ? OR product_name LIKE ?",
+			"%"+searchDescription+"%", "%"+searchDescription+"%")
+	}
+
+	// เพิ่มเงื่อนไขการค้นหาตามช่วงราคา (ถ้ามี)
+	if minPrice > 0 {
+		query = query.Where("price >= ?", minPrice)
+	}
+	if maxPrice > 0 {
+		query = query.Where("price <= ?", maxPrice)
+	}
+
+	// ดึงข้อมูลสินค้า
+	var products []models.Product
+	if err := query.Find(&products).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search products"})
+		return
+	}
+
+	// ตรวจสอบว่าพบสินค้าหรือไม่
+	if len(products) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No products found matching the criteria"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"products": products,
+		"count":    len(products),
+	})
+}
+
+// เพิ่มสินค้าลงรถเข็น
+func addToCart(c *gin.Context) {
+	customerID := c.Param("customer_id")
+
+	// ตรวจสอบว่ามี customer_id หรือไม่
+	if customerID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Customer ID is required"})
+		return
+	}
+
+	// ตรวจสอบว่ามีลูกค้าในระบบหรือไม่
+	var customer models.Customer
+	if err := database.DB.Table("customer").Where("customer_id = ?", customerID).First(&customer).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Customer not found"})
+		return
+	}
+
+	// รับข้อมูลการเพิ่มสินค้าลงรถเข็น
+	var request struct {
+		ProductID int    `json:"product_id"`
+		Quantity  int    `json:"quantity"`
+		CartName  string `json:"cart_name"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+
+	// ตรวจสอบข้อมูลที่จำเป็น
+	if request.ProductID == 0 || request.Quantity <= 0 || request.CartName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Product ID, quantity, and cart name are required"})
+		return
+	}
+
+	// ตรวจสอบว่ามีสินค้านี้ในระบบหรือไม่
+	var product models.Product
+	if err := database.DB.Table("product").Where("product_id = ?", request.ProductID).First(&product).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Product not found"})
+		return
+	}
+
+	// ตรวจสอบว่ามีรถเข็นตามชื่อที่กำหนดหรือไม่
+	var cart models.Cart
+	err := database.DB.Table("cart").Where("customer_id = ? AND cart_name = ?", customerID, request.CartName).First(&cart).Error
+
+	// ถ้าไม่มีรถเข็น ให้สร้างใหม่
+	if err != nil {
+		cart = models.Cart{
+			CustomerID: customer.CustomerID,
+			CartName:   request.CartName,
+		}
+
+		if err := database.DB.Table("cart").Create(&cart).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create new cart"})
+			return
+		}
+	}
+
+	// ตรวจสอบว่ามีสินค้านี้ในรถเข็นอยู่แล้วหรือไม่
+	var existingItem models.CartItemDB
+	err = database.DB.Table("cart_item").
+		Where("cart_id = ? AND product_id = ?", cart.CartID, request.ProductID).
+		First(&existingItem).Error
+
+	// ถ้ามีสินค้านี้อยู่แล้ว ให้เพิ่มจำนวน
+	if err == nil {
+		// อัปเดตจำนวนสินค้า
+		newQuantity := existingItem.Quantity + request.Quantity
+
+		if err := database.DB.Table("cart_item").
+			Where("cart_item_id = ?", existingItem.CartItemID).
+			Update("quantity", newQuantity).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update item quantity"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message":      "Product quantity updated in cart",
+			"cart_id":      cart.CartID,
+			"cart_name":    cart.CartName,
+			"product_id":   request.ProductID,
+			"product_name": product.ProductName,
+			"price":        product.Price,
+			"new_quantity": newQuantity,
+		})
+		return
+	}
+
+	// ถ้ายังไม่มีสินค้านี้ในรถเข็น ให้เพิ่มใหม่
+	newItem := models.CartItemDB{
+		CartID:    cart.CartID,
+		ProductID: request.ProductID,
+		Quantity:  request.Quantity,
+	}
+
+	if err := database.DB.Table("cart_item").Create(&newItem).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add item to cart"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":      "Product added to cart successfully",
+		"cart_id":      cart.CartID,
+		"cart_name":    cart.CartName,
+		"product_id":   request.ProductID,
+		"product_name": product.ProductName,
+		"price":        product.Price,
+		"quantity":     request.Quantity,
+	})
 }
