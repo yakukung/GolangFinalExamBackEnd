@@ -12,6 +12,7 @@ import (
 
 func DemoController(router *gin.Engine) {
 	router.POST("auth/login", login)
+	router.POST("auth/change-password", changePassword)
 }
 
 func login(c *gin.Context) {
@@ -37,7 +38,7 @@ func login(c *gin.Context) {
 
 	// Log รหัสผ่านเดิม
 	fmt.Println("Original password:", originalPassword)
-	// ค้นหาผู้ใช้จากอีเมล (ดึงข้อมูลใหม่หลังจากเข้ารหัสแล้ว)
+	// ค้นหาผ่านจากอีเมล (ดึงข้อมูลใหม่หลังจากเข้ารหัสแล้ว)
 	if err := database.DB.Table("customer").Where("email = ?", request.Email).First(&customer).Error; err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
@@ -66,4 +67,67 @@ func login(c *gin.Context) {
 	customer.Password = ""
 	c.JSON(http.StatusOK, customer)
 
+}
+
+// เพิ่มฟังก์ชันสำหรับเปลี่ยนรหัสผ่าน
+func changePassword(c *gin.Context) {
+	var request models.ChangePasswordRequest
+	var customer models.Customer
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+
+	// ตรวจสอบว่ามีข้อมูลครบถ้วนหรือไม่
+	if request.CustomerID == 0 || request.OldPassword == "" || request.NewPassword == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Customer ID, old password and new password are required"})
+		return
+	}
+
+	// ค้นหาผู้ใช้จาก customer_id
+	if err := database.DB.Table("customer").Where("customer_id = ?", request.CustomerID).First(&customer).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	// ดึงรหัสผ่านปัจจุบันจากฐานข้อมูล
+	var currentPassword string
+	if err := database.DB.Table("customer").Select("password").Where("customer_id = ?", request.CustomerID).Row().Scan(&currentPassword); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve current password"})
+		return
+	}
+
+	// ตรวจสอบรหัสผ่านเก่า - ตรวจสอบทั้งกรณีที่เป็น plain text และ bcrypt hash
+	var passwordMatch bool
+
+	// กรณีที่รหัสผ่านเป็น bcrypt hash (ขึ้นต้นด้วย $)
+	if len(currentPassword) > 0 && currentPassword[0] == '$' {
+		err := bcrypt.CompareHashAndPassword([]byte(currentPassword), []byte(request.OldPassword))
+		passwordMatch = (err == nil)
+	} else {
+		// กรณีที่รหัสผ่านเป็น plain text
+		passwordMatch = (currentPassword == request.OldPassword)
+	}
+
+	if !passwordMatch {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Current password is incorrect"})
+		return
+	}
+
+	// เข้ารหัสรหัสผ่านใหม่
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(request.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt new password"})
+		return
+	}
+
+	// อัปเดตรหัสผ่านในฐานข้อมูล
+	if err := database.DB.Table("customer").Where("customer_id = ?", customer.CustomerID).
+		Update("password", string(hashedPassword)).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update password"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Password changed successfully"})
 }
