@@ -5,6 +5,7 @@ import (
 	"go-final/database"
 	"go-final/models"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -13,6 +14,7 @@ import (
 func DemoController(router *gin.Engine) {
 	router.POST("auth/login", login)
 	router.POST("auth/change-password", changePassword)
+	router.GET("customer/:customer_id/carts", getCustomerCarts)
 }
 
 func login(c *gin.Context) {
@@ -130,4 +132,92 @@ func changePassword(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Password changed successfully"})
+}
+
+func getCustomerCarts(c *gin.Context) {
+	customerID := c.Param("customer_id")
+
+	// ตรวจสอบว่ามี customer_id หรือไม่
+	if customerID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Customer ID is required"})
+		return
+	}
+
+	// ตรวจสอบว่ามีลูกค้าในระบบหรือไม่
+	var customer models.Customer
+	if err := database.DB.Table("customer").Where("customer_id = ?", customerID).First(&customer).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Customer not found"})
+		return
+	}
+
+	// ดึงข้อมูลรถเข็นทั้งหมดของลูกค้า
+	var carts []struct {
+		CartID    int       `json:"cart_id"`
+		CartName  string    `json:"cart_name"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+
+	if err := database.DB.Table("cart").
+		Select("cart_id, cart_name, created_at").
+		Where("customer_id = ?", customerID).
+		Find(&carts).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve carts"})
+		return
+	}
+
+	// สร้างข้อมูลการตอบกลับ
+	response := models.CartResponse{
+		CustomerID: customer.CustomerID,
+		Carts:      []models.CartInfo{},
+	}
+
+	// ดึงข้อมูลสินค้าในแต่ละรถเข็น
+	for _, cart := range carts {
+		cartInfo := models.CartInfo{
+			CartID:    cart.CartID,
+			CartName:  cart.CartName,
+			CreatedAt: cart.CreatedAt,
+			Items:     []models.CartItem{},
+			Total:     0,
+		}
+
+		// ดึงข้อมูลสินค้าในรถเข็น
+		var items []struct {
+			CartItemID  int     `json:"cart_item_id"`
+			ProductID   int     `json:"product_id"`
+			ProductName string  `json:"product_name"`
+			Description string  `json:"description"`
+			Price       float64 `json:"price"`
+			Quantity    int     `json:"quantity"`
+		}
+
+		if err := database.DB.Table("cart_item").
+			Select("cart_item.cart_item_id, product.product_id, product.product_name, product.description, product.price, cart_item.quantity").
+			Joins("JOIN product ON cart_item.product_id = product.product_id").
+			Where("cart_item.cart_id = ?", cart.CartID).
+			Find(&items).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve cart items"})
+			return
+		}
+
+		// คำนวณราคารวมของแต่ละรายการและรถเข็น
+		for _, item := range items {
+			subtotal := float64(item.Quantity) * item.Price
+			cartItem := models.CartItem{
+				CartItemID:  item.CartItemID,
+				ProductID:   item.ProductID,
+				ProductName: item.ProductName,
+				Description: item.Description,
+				Price:       item.Price,
+				Quantity:    item.Quantity,
+				Subtotal:    subtotal,
+			}
+			cartInfo.Items = append(cartInfo.Items, cartItem)
+			cartInfo.Total += subtotal
+		}
+
+		response.Carts = append(response.Carts, cartInfo)
+	}
+
+	c.JSON(http.StatusOK, response)
 }
